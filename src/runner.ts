@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
-import { getSession, createSession } from "./sessions";
+import { getSession, createSession, resetSession } from "./sessions";
 import { getSettings, type ModelConfig, type SecurityConfig } from "./config";
 import { buildClockPromptPrefix } from "./timezone";
 
@@ -22,7 +22,12 @@ export interface RunResult {
   exitCode: number;
 }
 
-const RATE_LIMIT_PATTERN = /you(?:'|’)ve hit your limit/i;
+const RATE_LIMIT_PATTERN = /you(?:’)ve hit your limit/i;
+
+const BROKEN_SESSION_PATTERNS = [
+  "Invalid `signature` in `thinking` block",
+  "invalid_request_error",
+];
 
 // Serial queue — prevents concurrent --resume on the same session
 let queue: Promise<unknown> = Promise.resolve();
@@ -223,6 +228,12 @@ export async function loadHeartbeatPromptTemplate(): Promise<string> {
   return "";
 }
 
+function buildArgs(baseArgs: string[], sessionId: string | null, outputFormat: string): string[] {
+  const args = [...baseArgs, "--output-format", outputFormat];
+  if (sessionId) args.push("--resume", sessionId);
+  return args;
+}
+
 async function execClaude(name: string, prompt: string): Promise<RunResult> {
   await mkdir(LOGS_DIR, { recursive: true });
 
@@ -242,15 +253,6 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   console.log(
     `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level})`
   );
-
-  // New session: use json output to capture Claude's session_id
-  // Resumed session: use text output with --resume
-  const outputFormat = isNew ? "json" : "text";
-  const args = ["claude", "-p", prompt, "--output-format", outputFormat, ...securityArgs];
-
-  if (!isNew) {
-    args.push("--resume", existing.sessionId);
-  }
 
   // Build the appended system prompt: prompt files + directory scoping
   // This is passed on EVERY invocation (not just new sessions) because
@@ -272,15 +274,38 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   }
 
   if (security.level !== "unrestricted") appendParts.push(DIR_SCOPE_PROMPT);
-  if (appendParts.length > 0) {
-    args.push("--append-system-prompt", appendParts.join("\n\n"));
-  }
+
+  // New session: use json output to capture Claude's session_id
+  // Resumed session: use text output with --resume
+  const outputFormat = isNew ? "json" : "text";
 
   // Strip CLAUDECODE env var so child claude processes don't think they're nested
   const { CLAUDECODE: _, ...cleanEnv } = process.env;
   const baseEnv = { ...cleanEnv } as Record<string, string>;
 
+  // Build base args (without --output-format and --resume)
+  let baseArgs = ["claude", "-p", prompt, ...securityArgs];
+  if (appendParts.length > 0) {
+    baseArgs.push("--append-system-prompt", appendParts.join("\n\n"));
+  }
+
+  // Build final args with output format and resume
+  let args = buildArgs(baseArgs, isNew ? null : existing.sessionId, outputFormat);
+
   let exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv);
+
+  // Check for broken session patterns
+  const isBrokenSession =
+    exec.exitCode !== 0 &&
+    BROKEN_SESSION_PATTERNS.some((p) => exec.rawStdout.includes(p) || exec.stderr.includes(p));
+
+  if (isBrokenSession) {
+    console.warn(`[${new Date().toLocaleTimeString()}] Broken session detected, resetting...`);
+    await resetSession();
+    // Retry with fresh session (no --resume)
+    args = buildArgs(baseArgs, null, "json");
+    exec = await runClaudeOnce(args, primaryConfig.model, primaryConfig.api, baseEnv);
+  }
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
