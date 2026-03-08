@@ -59,7 +59,7 @@ function isNotFoundError(error: unknown): boolean {
 }
 
 function buildChildEnv(baseEnv: Record<string, string>, model: string, api: string): Record<string, string> {
-  const childEnv: Record<string, string> = { ...baseEnv };
+  const childEnv: Record<string, string> = { ...baseEnv, IS_SANDBOX: "1" };
   const normalizedModel = model.trim().toLowerCase();
 
   if (api.trim()) childEnv.ANTHROPIC_AUTH_TOKEN = api.trim();
