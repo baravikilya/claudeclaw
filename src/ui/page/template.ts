@@ -69,6 +69,7 @@ ${pageStyles}
           <div class="settings-meta">Technical runtime and JSON files</div>
         </div>
         <button class="hb-toggle on" id="info-open" type="button">Info</button>
+        <button class="hb-toggle" id="voice-open" type="button">Voice</button>
       </div>
     </div>
   </aside>
@@ -111,6 +112,117 @@ ${pageStyles}
       </div>
     </article>
   </section>
+
+  <!-- Voice API Settings Modal -->
+  <section class="info-modal" id="voice-modal" aria-live="polite" aria-hidden="true">
+    <article class="hb-card">
+      <div class="info-head">
+        <span>Voice & Vision Settings</span>
+        <button class="settings-close" id="voice-modal-close" type="button" aria-label="Close voice settings">×</button>
+      </div>
+      <form class="hb-form" id="voice-form">
+        <!-- STT Provider Selection -->
+        <div class="hb-field">
+          <span class="hb-label">STT Provider (Speech-to-Text)</span>
+          <select class="hb-input" id="stt-provider">
+            <option value="local">Local Whisper (Offline)</option>
+            <option value="groq">Groq API (whisper-large-v3)</option>
+            <option value="openai">OpenAI API (whisper-1)</option>
+          </select>
+        </div>
+
+        <!-- Groq Settings -->
+        <div id="groq-settings" class="provider-settings hidden" style="margin-top: 16px;">
+          <label class="hb-field">
+            <span class="hb-label">Groq API Key</span>
+            <input class="hb-input" id="groq-api-key" type="password" placeholder="gsk_..." />
+          </label>
+          <div class="hb-actions">
+            <button class="hb-btn ghost" id="test-groq-btn" type="button">Test Connection</button>
+            <div class="hb-status" id="groq-status"></div>
+          </div>
+        </div>
+
+        <!-- OpenAI Settings -->
+        <div id="openai-settings" class="provider-settings hidden" style="margin-top: 16px;">
+          <label class="hb-field">
+            <span class="hb-label">OpenAI API Key</span>
+            <input class="hb-input" id="openai-api-key" type="password" placeholder="sk-..." />
+          </label>
+          <div class="hb-actions">
+            <button class="hb-btn ghost" id="test-openai-btn" type="button">Test Connection</button>
+            <div class="hb-status" id="openai-status"></div>
+          </div>
+        </div>
+
+        <!-- TTS Settings -->
+        <div style="margin-top: 24px; border-top: 1px solid #333; padding-top: 16px;">
+          <label class="hb-field">
+            <input class="hb-checkbox" id="tts-enabled" type="checkbox" />
+            <span class="hb-label">Enable Voice Replies (TTS)</span>
+          </label>
+        </div>
+
+        <div id="elevenlabs-settings" class="provider-settings hidden" style="margin-top: 16px;">
+          <label class="hb-field">
+            <span class="hb-label">ElevenLabs API Key</span>
+            <input class="hb-input" id="elevenlabs-api-key" type="password" placeholder="xi-..." />
+          </label>
+          <label class="hb-field">
+            <span class="hb-label">Voice ID</span>
+            <input class="hb-input" id="elevenlabs-voice-id" type="text" placeholder="e.g., 21m00TCM4TM7Q5afqHxYDq7Yp" />
+          </label>
+          <div class="hb-actions">
+            <button class="hb-btn ghost" id="preview-voice-btn" type="button">Preview Voice</button>
+            <div class="hb-status" id="elevenlabs-status"></div>
+          </div>
+        </div>
+
+        <!-- Gemini Vision Settings -->
+        <div style="margin-top: 24px; border-top: 1px solid #333; padding-top: 16px;">
+          <label class="hb-field">
+            <input class="hb-checkbox" id="gemini-enabled" type="checkbox" />
+            <span class="hb-label">Enable Gemini Vision API</span>
+          </label>
+        </div>
+
+        <div id="gemini-settings" class="provider-settings hidden" style="margin-top: 16px;">
+          <label class="hb-field">
+            <span class="hb-label">Gemini API Key</span>
+            <input class="hb-input" id="gemini-api-key" type="password" placeholder="AIza..." />
+          </label>
+          <label class="hb-field">
+            <span class="hb-label">Model</span>
+            <select class="hb-input" id="gemini-model">
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+              <option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced)</option>
+            </select>
+          </label>
+          <label class="hb-field" style="margin-top: 8px;">
+            <input class="hb-checkbox" id="gemini-images" type="checkbox" />
+            <span class="hb-label">Analyze Images</span>
+          </label>
+          <label class="hb-field">
+            <input class="hb-checkbox" id="gemini-video" type="checkbox" />
+            <span class="hb-label">Analyze Video</span>
+          </label>
+          <div class="hb-actions">
+            <button class="hb-btn ghost" id="test-gemini-btn" type="button">Test Connection</button>
+            <div class="hb-status" id="gemini-status"></div>
+          </div>
+        </div>
+
+        <div class="hb-actions" style="margin-top: 24px;">
+          <div class="hb-status" id="voice-modal-status"></div>
+          <div class="hb-buttons">
+            <button class="hb-btn ghost" id="voice-cancel-btn" type="button">Cancel</button>
+            <button class="hb-btn solid" id="voice-save-btn" type="submit">Save</button>
+          </div>
+        </div>
+      </form>
+    </article>
+  </section>
+
   <main class="stage">
     <section class="hero">
       <div class="logo-art" role="img" aria-label="Lobster ASCII art logo">

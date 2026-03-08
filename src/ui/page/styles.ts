@@ -1130,4 +1130,66 @@ export const pageStyles = String.raw`    :root {
       .pill:nth-last-child(2) {
         border-bottom: 0;
       }
-    }`;
+    }
+
+    /* Voice Settings Styles */
+    .provider-settings {
+      display: none;
+    }
+
+    .provider-settings:not(.hidden) {
+      display: block;
+    }
+
+    .hb-checkbox[type="checkbox"] {
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border: 2px solid #444;
+      border-radius: 4px;
+      background: #1a1a1a;
+      cursor: pointer;
+      position: relative;
+      margin-right: 8px;
+    }
+
+    .hb-checkbox[type="checkbox"]:checked {
+      background: #4CAF50;
+      border-color: #4CAF50;
+    }
+
+    .hb-checkbox[type="checkbox"]:checked::after {
+      content: "✓";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: white;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .hb-checkbox[type="checkbox"]:focus {
+      outline: 2px solid #4CAF50;
+      outline-offset: 2px;
+    }
+
+    .hb-btn.ghost:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .hb-btn.solid:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Voice status messages */
+    #groq-status,
+    #openai-status,
+    #elevenlabs-status,
+    #gemini-status {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+  `;

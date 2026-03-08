@@ -2,8 +2,28 @@ import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
+import { ElevenLabsTTSProvider } from "../voice/tts-providers";
+import { GeminiVisionAnalyzer } from "../vision/gemini";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+
+// Voice mode tracking for TTS
+const voiceModeChats = new Set<number>();
+
+// Helper to send voice message via Telegram
+async function sendVoiceMessage(token: string, chatId: number, audioBuffer: Buffer, threadId?: number): Promise<void> {
+  const formData = new FormData();
+  formData.append("chat_id", String(chatId));
+  if (threadId) {
+    formData.append("message_thread_id", String(threadId));
+  }
+  formData.append("voice", new Blob([audioBuffer], { type: "audio/mpeg" }), "voice.mp3");
+
+  await fetch(`${API_BASE}${token}/sendVoice`, {
+    method: "POST",
+    body: formData,
+  });
+}
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
 
@@ -469,6 +489,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   const isPrivate = chatType === "private";
   const isGroup = chatType === "group" || chatType === "supergroup";
   const hasImage = Boolean((message.photo && message.photo.length > 0) || isImageDocument(message.document));
+  const hasVideo = Boolean(message.video); // TODO: also check video documents
   const hasVoice = Boolean(message.voice || message.audio || isAudioDocument(message.document));
 
   if (!isPrivate && !isGroup) return;
@@ -494,7 +515,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
-  if (!text.trim() && !hasImage && !hasVoice) {
+  if (!text.trim() && !hasImage && !hasVideo && !hasVoice) {
     debugLog(`Skip message chat=${chatId} from=${userId ?? "unknown"} reason=empty_text`);
     return;
   }
@@ -513,6 +534,23 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   if (command === "/reset") {
     await resetSession();
     await sendMessage(config.token, chatId, "Global session reset. Next message starts fresh.", threadId);
+    return;
+  }
+
+  if (command === "/voice") {
+    const isEnabled = voiceModeChats.has(chatId);
+    if (isEnabled) {
+      voiceModeChats.delete(chatId);
+      await sendMessage(config.token, chatId, "🔊 Voice replies OFF", threadId);
+    } else {
+      const settings = getSettings();
+      if (!settings.elevenLabs.enabled || !settings.elevenLabs.apiKey) {
+        await sendMessage(config.token, chatId, "❌ ElevenLabs not configured. Please set up API key in settings.", threadId);
+      } else {
+        voiceModeChats.add(chatId);
+        await sendMessage(config.token, chatId, "🔊 Voice replies ON - I will respond with voice messages", threadId);
+      }
+    }
     return;
   }
 
@@ -539,7 +577,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   }
 
   const label = message.from?.username ?? String(userId ?? "unknown");
-  const mediaParts = [hasImage ? "image" : "", hasVoice ? "voice" : ""].filter(Boolean);
+  const mediaParts = [hasImage ? "image" : "", hasVideo ? "video" : "", hasVoice ? "voice" : ""].filter(Boolean);
   const mediaSuffix = mediaParts.length > 0 ? ` [${mediaParts.join("+")}]` : "";
   console.log(
     `[${new Date().toLocaleTimeString()}] Telegram ${label}${mediaSuffix}: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`
@@ -551,6 +589,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   try {
     await sendTyping(config.token, chatId, threadId);
     let imagePath: string | null = null;
+    let videoPath: string | null = null;
     let voicePath: string | null = null;
     let voiceTranscript: string | null = null;
     if (hasImage) {
@@ -560,6 +599,80 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         console.error(`[Telegram] Failed to download image for ${label}: ${err instanceof Error ? err.message : err}`);
       }
     }
+
+    // Handle video with Gemini Vision API
+    if (hasVideo) {
+      try {
+        await sendMessage(config.token, chatId, "🎬 Analyzing video with Gemini... This may take a moment for longer videos.", threadId);
+
+        // Download video (similar to image download)
+        const videoFileId = message.video?.file_id;
+        if (videoFileId) {
+          const fileMeta = await callApi<{ ok: boolean; result: TelegramFile }>(config.token, "getFile", { file_id: videoFileId });
+          if (fileMeta.ok && fileMeta.result.file_path) {
+            const remotePath = fileMeta.result.file_path;
+            const downloadUrl = `${FILE_API_BASE}${config.token}/${remotePath}`;
+            const response = await fetch(downloadUrl);
+            if (response.ok) {
+              const dir = join(process.cwd(), ".claude", "claudeclaw", "inbox", "telegram");
+              await mkdir(dir, { recursive: true });
+              const filename = `${message.chat.id}-${message.message_id}-${Date.now()}.mp4`;
+              videoPath = join(dir, filename);
+              const bytes = new Uint8Array(await response.arrayBuffer());
+              await Bun.write(videoPath, bytes);
+            }
+          }
+        }
+
+        if (videoPath) {
+          const settings = getSettings();
+          if (settings.gemini.enabled && settings.gemini.analyzeVideo) {
+            try {
+              const gemini = new GeminiVisionAnalyzer(
+                settings.gemini.apiKey,
+                settings.gemini.model
+              );
+              const analysis = await gemini.analyzeVideo(
+                videoPath,
+                "Provide comprehensive analysis: visual scenes, actions, people, objects, text, and audio summary"
+              );
+              promptParts.push(`[Gemini Video Analysis]`);
+              promptParts.push(analysis);
+              promptParts.push("The user attached a video. Use the Gemini analysis above.");
+            } catch (error) {
+              console.error(`[Telegram] Gemini video analysis failed: ${error}`);
+              // Fallback to audio transcription
+              try {
+                const transcript = await transcribeAudioToText(videoPath, {
+                  debug: telegramDebug,
+                  log: (msg) => debugLog(msg),
+                });
+                promptParts.push(`Video audio transcript: ${transcript}`);
+                promptParts.push(`Video path: ${videoPath}`);
+              } catch (sttError) {
+                promptParts.push(`Video path: ${videoPath}`);
+                promptParts.push("The user attached a video. Both Gemini and transcription failed.");
+              }
+            }
+          } else {
+            // Gemini not enabled, just transcribe audio
+            try {
+              const transcript = await transcribeAudioToText(videoPath, {
+                debug: telegramDebug,
+                log: (msg) => debugLog(msg),
+              });
+              promptParts.push(`Video audio: ${transcript}`);
+              promptParts.push(`Video path: ${videoPath}`);
+            } catch (sttError) {
+              promptParts.push(`Video path: ${videoPath}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[Telegram] Failed to process video for ${label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     if (hasVoice) {
       try {
         voicePath = await downloadVoiceFromMessage(config.token, message);
@@ -583,12 +696,38 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const promptParts = [`[Telegram from ${label}]`];
     if (threadId) promptParts.push(`[thread:${threadId}]`);
     if (text.trim()) promptParts.push(`Message: ${text}`);
+
+    // Handle image with Gemini Vision API
     if (imagePath) {
-      promptParts.push(`Image path: ${imagePath}`);
-      promptParts.push("The user attached an image. Inspect this image file directly before answering.");
+      const settings = getSettings();
+      if (settings.gemini.enabled && settings.gemini.analyzeImages) {
+        try {
+          debugLog(`Analyzing image with Gemini: ${imagePath}`);
+          const gemini = new GeminiVisionAnalyzer(
+            settings.gemini.apiKey,
+            settings.gemini.model
+          );
+          const analysis = await gemini.analyzeImage(
+            imagePath,
+            "Describe what you see in detail, including any text, objects, people, and context"
+          );
+          promptParts.push(`[Gemini Vision Analysis]`);
+          promptParts.push(analysis);
+          promptParts.push("The user attached an image. Use the Gemini analysis above.");
+        } catch (error) {
+          console.error(`[Telegram] Gemini image analysis failed: ${error}`);
+          promptParts.push(`Image path: ${imagePath}`);
+          promptParts.push("The user attached an image. Gemini analysis failed, please analyze directly.");
+        }
+      } else {
+        promptParts.push(`Image path: ${imagePath}`);
+        promptParts.push("The user attached an image. Inspect this image file directly before answering.");
+      }
     } else if (hasImage) {
       promptParts.push("The user attached an image, but downloading it failed. Respond and ask them to resend.");
     }
+
+    // Handle voice transcript
     if (voiceTranscript) {
       promptParts.push(`Voice transcript: ${voiceTranscript}`);
       promptParts.push("The user attached voice audio. Use the transcript as their spoken message.");
@@ -597,6 +736,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         "The user attached voice audio, but it could not be transcribed. Respond and ask them to resend a clearer clip."
       );
     }
+
     const prefixedPrompt = promptParts.join("\n");
     const result = await runUserMessage("telegram", prefixedPrompt);
 
@@ -609,7 +749,34 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           console.error(`[Telegram] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
         });
       }
-      await sendMessage(config.token, chatId, cleanedText || "(empty response)", threadId);
+
+      // Determine if we should send voice reply
+      const settings = getSettings();
+      const voiceEnabled = voiceModeChats.has(chatId) || (hasVoice && voiceTranscript);
+      const useTTS = voiceEnabled && settings.voiceApi.ttsEnabled && settings.elevenLabs.enabled;
+
+      if (useTTS) {
+        try {
+          const tts = new ElevenLabsTTSProvider(
+            settings.elevenLabs.apiKey,
+            settings.elevenLabs.voiceId,
+            settings.elevenLabs.model
+          );
+          const audioBuffer = await tts.synthesize(cleanedText || "(empty response)");
+          await sendVoiceMessage(config.token, chatId, audioBuffer, threadId);
+        } catch (error) {
+          console.error(`[Telegram] TTS failed for ${label}: ${error}`);
+          // Fallback to text message with notification
+          await sendMessage(
+            config.token,
+            chatId,
+            `🔊 [Voice generation failed]\n\n${cleanedText || "(empty response)"}`,
+            threadId
+          );
+        }
+      } else {
+        await sendMessage(config.token, chatId, cleanedText || "(empty response)", threadId);
+      }
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);

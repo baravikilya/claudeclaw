@@ -616,6 +616,99 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
         infoModal.setAttribute("aria-hidden", "true");
       });
     }
+
+    // Voice settings modal handlers
+    const voiceOpen = $("voice-open");
+    const voiceModal = $("voice-modal");
+    const voiceModalClose = $("voice-modal-close");
+    const voiceCancelBtn = $("voice-cancel-btn");
+    const voiceSaveBtn = $("voice-save-btn");
+    const voiceModalStatus = $("voice-modal-status");
+
+    if (voiceOpen && voiceModal) {
+      voiceOpen.addEventListener("click", async () => {
+        voiceModal.classList.add("open");
+        voiceModal.setAttribute("aria-hidden", "false");
+        voiceModalStatus.textContent = "Loading...";
+        await loadVoiceSettings();
+        voiceModalStatus.textContent = "";
+      });
+    }
+
+    if (voiceModalClose && voiceModal) {
+      voiceModalClose.addEventListener("click", () => {
+        voiceModal.classList.remove("open");
+        voiceModal.setAttribute("aria-hidden", "true");
+      });
+    }
+
+    if (voiceCancelBtn && voiceModal) {
+      voiceCancelBtn.addEventListener("click", () => {
+        voiceModal.classList.remove("open");
+        voiceModal.setAttribute("aria-hidden", "true");
+      });
+    }
+
+    // STT provider change handler
+    const sttProviderSelect = $("stt-provider");
+    if (sttProviderSelect) {
+      sttProviderSelect.addEventListener("change", async () => {
+        const provider = sttProviderSelect.value;
+        await updateVoiceApiProvider(provider);
+        showProviderSettings(provider);
+      });
+    }
+
+    // TTS toggle handler
+    const ttsEnabled = $("tts-enabled");
+    if (ttsEnabled) {
+      ttsEnabled.addEventListener("change", async () => {
+        const enabled = ttsEnabled.checked;
+        await updateElevenLabsSettings({ ttsEnabled: enabled });
+        showElevenLabsSettings(enabled);
+      });
+    }
+
+    // Test connection buttons
+    const testGroqBtn = $("test-groq-btn");
+    if (testGroqBtn) {
+      testGroqBtn.addEventListener("click", async () => testSttConnection("groq"));
+    }
+
+    const testOpenAIBtn = $("test-openai-btn");
+    if (testOpenAIBtn) {
+      testOpenAIBtn.addEventListener("click", async () => testSttConnection("openai"));
+    }
+
+    const testGeminiBtn = $("test-gemini-btn");
+    if (testGeminiBtn) {
+      testGeminiBtn.addEventListener("click", async () => testGeminiConnection());
+    }
+
+    const previewVoiceBtn = $("preview-voice-btn");
+    if (previewVoiceBtn) {
+      previewVoiceBtn.addEventListener("click", async () => previewVoice());
+    }
+
+    // Save voice settings
+    if (voiceSaveBtn && voiceModal) {
+      voiceSaveBtn.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        voiceSaveBtn.disabled = true;
+        voiceModalStatus.textContent = "Saving...";
+
+        try {
+          await saveVoiceSettings();
+          voiceModalStatus.textContent = "Saved successfully!";
+          setTimeout(() => voiceModalStatus.textContent = "", 2000);
+        } catch (err) {
+          voiceModalStatus.textContent = "Failed: " + String(err);
+        } finally {
+          voiceSaveBtn.disabled = false;
+        }
+      });
+    }
+
     document.addEventListener("click", (event) => {
       if (!settingsModal || !settingsBtn) return;
       if (!settingsModal.classList.contains("open")) return;
@@ -930,4 +1023,237 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
 
     loadSettings();
     refreshState();
-    setInterval(refreshState, 1000);`;
+    setInterval(refreshState, 1000);
+
+    // Voice settings helper functions
+    async function loadVoiceSettings() {
+      const [groq, openai, elevenLabs, gemini] = await Promise.all([
+        fetch("/api/settings/groq").then(r => r.json()),
+        fetch("/api/settings/openai").then(r => r.json()),
+        fetch("/api/settings/elevenlabs").then(r => r.json()),
+        fetch("/api/settings/gemini").then(r => r.json()),
+      ]);
+
+      const sttProviderSelect = $("stt-provider");
+      if (sttProviderSelect) sttProviderSelect.value = groq.sttProvider || "local";
+
+      updateProviderUIs(groq, openai, elevenLabs, gemini);
+    }
+
+    function updateProviderUIs(groq: any, openai: any, elevenLabs: any, gemini: any) {
+      const groqSettings = $("groq-settings");
+      const openaiSettings = $("openai-settings");
+      const elevenlabsSettings = $("elevenlabs-settings");
+      const geminiSettings = $("gemini-settings");
+
+      if (groqSettings) {
+        $("groq-api-key").value = groq.apiKey || "";
+        groqSettings.classList.toggle("hidden", !groq.enabled);
+      }
+      if (openaiSettings) {
+        $("openai-api-key").value = openai.apiKey || "";
+        openaiSettings.classList.toggle("hidden", !openai.enabled);
+      }
+      if (elevenlabsSettings) {
+        $("elevenlabs-api-key").value = elevenLabs.apiKey || "";
+        $("elevenlabs-voice-id").value = elevenLabs.voiceId || "";
+        $("tts-enabled").checked = elevenLabs.ttsEnabled;
+        elevenlabsSettings.classList.toggle("hidden", !elevenLabs.enabled);
+      }
+      if (geminiSettings) {
+        $("gemini-api-key").value = gemini.apiKey || "";
+        $("gemini-model").value = gemini.model || "gemini-2.5-flash";
+        $("gemini-enabled").checked = gemini.enabled;
+        $("gemini-images").checked = gemini.analyzeImages;
+        $("gemini-video").checked = gemini.analyzeVideo;
+        geminiSettings.classList.toggle("hidden", !gemini.enabled);
+      }
+    }
+
+    function showProviderSettings(provider: string) {
+      const groqSettings = $("groq-settings");
+      const openaiSettings = $("openai-settings");
+      const groqKey = $("groq-api-key");
+      const openaiKey = $("openai-api-key");
+
+      if (provider === "groq") {
+        groqSettings?.classList.remove("hidden");
+        openaiSettings?.classList.add("hidden");
+        groqKey?.setAttribute("required", "required");
+        openaiKey?.removeAttribute("required");
+      } else if (provider === "openai") {
+        openaiSettings?.classList.remove("hidden");
+        groqSettings?.classList.add("hidden");
+        openaiKey?.setAttribute("required", "required");
+        groqKey?.removeAttribute("required");
+      } else {
+        groqSettings?.classList.add("hidden");
+        openaiSettings?.classList.add("hidden");
+        groqKey?.removeAttribute("required");
+        openaiKey?.removeAttribute("required");
+      }
+    }
+
+    function showElevenLabsSettings(show: boolean) {
+      const settings = $("elevenlabs-settings");
+      if (settings) {
+        settings.classList.toggle("hidden", !show);
+      }
+    }
+
+    async function testSttConnection(provider: "groq" | "openai") {
+      const statusEl = $(`${provider}-status`);
+      statusEl.textContent = "Testing...";
+
+      const apiKey = $(`${provider}-api-key`).value;
+      if (!apiKey) {
+        statusEl.textContent = "Please enter API key first";
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/settings/${provider}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: true,
+            apiKey: apiKey,
+          }),
+        });
+
+        if (response.ok) {
+          statusEl.textContent = "✓ Connected";
+          setTimeout(() => statusEl.textContent = "", 3000);
+        } else {
+          throw new Error("Connection failed");
+        }
+      } catch (error) {
+        statusEl.textContent = "✗ Failed: " + error;
+      }
+    }
+
+    async function testGeminiConnection() {
+      const statusEl = $("gemini-status");
+      statusEl.textContent = "Testing...";
+
+      const apiKey = $("gemini-api-key").value;
+      if (!apiKey) {
+        statusEl.textContent = "Please enter API key first";
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/settings/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: true,
+            apiKey: apiKey,
+          }),
+        });
+
+        if (response.ok) {
+          statusEl.textContent = "✓ Connected";
+          setTimeout(() => statusEl.textContent = "", 3000);
+        } else {
+          throw new Error("Connection failed");
+        }
+      } catch (error) {
+        statusEl.textContent = "✗ Failed: " + error;
+      }
+    }
+
+    async function previewVoice() {
+      const statusEl = $("elevenlabs-status");
+      statusEl.textContent = "Generating preview...";
+
+      const apiKey = $("elevenlabs-api-key").value;
+      const voiceId = $("elevenlabs-voice-id").value;
+      if (!apiKey || !voiceId) {
+        statusEl.textContent = "Please enter API key and voice ID";
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/settings/elevenlabs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: true,
+            apiKey,
+            voiceId,
+          }),
+        });
+
+        if (!response.ok) throw new Error("Failed to save settings");
+
+        // Trigger TTS preview by playing an audio file
+        // This would require a separate endpoint for TTS preview
+        statusEl.textContent = "✓ Preview feature coming soon";
+        setTimeout(() => statusEl.textContent = "", 3000);
+      } catch (error) {
+        statusEl.textContent = "✗ Failed: " + error;
+      }
+    }
+
+    async function saveVoiceSettings() {
+      const groqApiKey = $("groq-api-key").value;
+      const openaiApiKey = $("openai-api-key").value;
+      const elevenlabsApiKey = $("elevenlabs-api-key").value;
+      const elevenlabsVoiceId = $("elevenlabs-voice-id").value;
+      const geminiApiKey = $("gemini-api-key").value;
+      const geminiModel = $("gemini-model").value;
+      const sttProvider = ($("stt-provider") as HTMLSelectElement)?.value || "local";
+      const ttsEnabled = $("tts-enabled")?.checked || false;
+      const geminiEnabled = $("gemini-enabled")?.checked || false;
+      const geminiImages = $("gemini-images")?.checked || false;
+      const geminiVideo = $("gemini-video")?.checked || false;
+
+      await Promise.all([
+        fetch("/api/settings/groq", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: groqApiKey !== "",
+            apiKey: groqApiKey,
+            model: "whisper-large-v3",
+          }),
+        }),
+        fetch("/api/settings/openai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: openaiApiKey !== "",
+            apiKey: openaiApiKey,
+            model: "whisper-1",
+          }),
+        }),
+        fetch("/api/settings/elevenlabs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: elevenlabsApiKey !== "",
+            apiKey: elevenlabsApiKey,
+            voiceId: elevenlabsVoiceId,
+            model: "eleven_turbo_v2_5",
+            ttsEnabled,
+          }),
+        }),
+        fetch("/api/settings/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: geminiEnabled,
+            apiKey: geminiApiKey,
+            model: geminiModel,
+            analyzeImages: geminiImages,
+            analyzeVideo: geminiVideo,
+          }),
+        }),
+        fetch("/api/settings/voice-api", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: sttProvider }),
+        }),
+      ]);
+    }

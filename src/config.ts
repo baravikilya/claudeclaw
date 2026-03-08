@@ -29,6 +29,12 @@ const DEFAULT_SETTINGS: Settings = {
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
   web: { enabled: false, host: "127.0.0.1", port: 4632 },
   stt: { baseUrl: "", model: "" },
+  // New Voice API settings
+  voiceApi: { sttProvider: "local", ttsEnabled: false },
+  groq: { enabled: false, apiKey: "", model: "whisper-large-v3" },
+  openai: { enabled: false, apiKey: "", model: "whisper-1" },
+  elevenLabs: { enabled: false, apiKey: "", voiceId: "", model: "eleven_turbo_v2_5" },
+  gemini: { enabled: false, apiKey: "", model: "gemini-2.5-flash", analyzeImages: false, analyzeVideo: false },
 };
 
 export interface HeartbeatExcludeWindow {
@@ -79,6 +85,12 @@ export interface Settings {
   security: SecurityConfig;
   web: WebConfig;
   stt: SttConfig;
+  // New Voice API and Vision settings
+  voiceApi: VoiceApiConfig;
+  groq: GroqConfig;
+  openai: OpenAIConfig;
+  elevenLabs: ElevenLabsConfig;
+  gemini: GeminiConfig;
 }
 
 export interface ModelConfig {
@@ -99,6 +111,45 @@ export interface SttConfig {
   baseUrl: string;
   /** Model name passed to the API (default: "Systran/faster-whisper-large-v3") */
   model: string;
+}
+
+// Voice API provider selection
+export interface VoiceApiConfig {
+  /** Which STT provider to use: 'local' (whisper.cpp), 'groq', or 'openai' */
+  sttProvider: "local" | "groq" | "openai";
+  /** Enable TTS (voice replies) */
+  ttsEnabled: boolean;
+}
+
+// Groq STT configuration
+export interface GroqConfig {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+}
+
+// OpenAI STT configuration
+export interface OpenAIConfig {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+}
+
+// ElevenLabs TTS configuration
+export interface ElevenLabsConfig {
+  enabled: boolean;
+  apiKey: string;
+  voiceId: string;
+  model: string;
+}
+
+// Gemini Vision configuration
+export interface GeminiConfig {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+  analyzeImages: boolean;
+  analyzeVideo: boolean;
 }
 
 let cached: Settings | null = null;
@@ -174,6 +225,35 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
     stt: {
       baseUrl: typeof raw.stt?.baseUrl === "string" ? raw.stt.baseUrl.trim() : "",
       model: typeof raw.stt?.model === "string" ? raw.stt.model.trim() : "",
+    },
+    voiceApi: {
+      sttProvider: raw.voiceApi?.sttProvider === "groq" || raw.voiceApi?.sttProvider === "openai"
+        ? raw.voiceApi.sttProvider
+        : "local",
+      ttsEnabled: raw.voiceApi?.ttsEnabled === true,
+    },
+    groq: {
+      enabled: raw.groq?.enabled === true,
+      apiKey: typeof raw.groq?.apiKey === "string" ? raw.groq.apiKey.trim() : "",
+      model: typeof raw.groq?.model === "string" ? raw.groq.model.trim() : "whisper-large-v3",
+    },
+    openai: {
+      enabled: raw.openai?.enabled === true,
+      apiKey: typeof raw.openai?.apiKey === "string" ? raw.openai.apiKey.trim() : "",
+      model: typeof raw.openai?.model === "string" ? raw.openai.model.trim() : "whisper-1",
+    },
+    elevenLabs: {
+      enabled: raw.elevenLabs?.enabled === true,
+      apiKey: typeof raw.elevenLabs?.apiKey === "string" ? raw.elevenLabs.apiKey.trim() : "",
+      voiceId: typeof raw.elevenLabs?.voiceId === "string" ? raw.elevenLabs.voiceId.trim() : "",
+      model: typeof raw.elevenLabs?.model === "string" ? raw.elevenLabs.model.trim() : "eleven_turbo_v2_5",
+    },
+    gemini: {
+      enabled: raw.gemini?.enabled === true,
+      apiKey: typeof raw.gemini?.apiKey === "string" ? raw.gemini.apiKey.trim() : "",
+      model: typeof raw.gemini?.model === "string" ? raw.gemini.model.trim() : "gemini-2.5-flash",
+      analyzeImages: raw.gemini?.analyzeImages === true,
+      analyzeVideo: raw.gemini?.analyzeVideo === true,
     },
   };
 }

@@ -349,10 +349,54 @@ export async function transcribeAudioToText(
 ): Promise<string> {
   const log = options?.debug ? (options?.log ?? console.log) : noopLog;
 
-  const stt = getSettings().stt;
+  const settings = getSettings();
+  const stt = settings.stt;
+
+  // Check if new Voice API providers are configured
+  if (settings.voiceApi.sttProvider !== "local") {
+    try {
+      const { createSTTProvider } = await import("./voice/stt-providers.js");
+
+      // Create a local STT provider as fallback
+      const localProvider: any = {
+        name: "local",
+        async transcribe(path: string, opts?: any) {
+          return transcribeLocal(path, opts);
+        }
+      };
+
+      const sttProvider = createSTTProvider(settings, localProvider);
+      log(`voice transcribe: using ${sttProvider.name} STT provider`);
+
+      return await sttProvider.transcribe(inputPath, {
+        language: "en",
+        debug: options?.debug,
+        log,
+      });
+    } catch (error) {
+      log(`voice transcribe: Voice API provider failed, falling back to local: ${error}`);
+      // Fall through to local transcription
+    }
+  }
+
+  // Legacy STT API support
   if (stt?.baseUrl) {
     return transcribeViaApi(inputPath, stt.baseUrl, stt.model, log);
   }
+
+  // Local transcription
+  return transcribeLocal(inputPath, options);
+}
+
+/**
+ * Local Whisper transcription (original implementation)
+ */
+async function transcribeLocal(
+  inputPath: string,
+  options?: { debug?: boolean; log?: WhisperDebugLog }
+): Promise<string> {
+  const log = options?.debug ? (options?.log ?? console.log) : noopLog;
+
   await warmupWhisperAssets();
   log(`voice transcribe: warmup ready cwd=${process.cwd()} input=${inputPath}`);
   try {

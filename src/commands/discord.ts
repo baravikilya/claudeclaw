@@ -2,8 +2,13 @@ import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
+import { ElevenLabsTTSProvider } from "../voice/tts-providers";
+import { GeminiVisionAnalyzer } from "../vision/gemini";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+
+// Voice mode tracking for TTS
+const voiceModeChannels = new Set<string>();
 
 // --- Discord API constants ---
 
@@ -254,6 +259,10 @@ function isVoiceAttachment(a: DiscordAttachment): boolean {
   return Boolean(a.content_type?.startsWith("audio/"));
 }
 
+function isVideoAttachment(a: DiscordAttachment): boolean {
+  return Boolean(a.content_type?.startsWith("video/"));
+}
+
 async function downloadDiscordAttachment(
   attachment: DiscordAttachment,
   type: "image" | "voice",
@@ -354,13 +363,42 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     return;
   }
 
+  // Command handling
+  const commandMatch = cleanContent.match(/^\/(\w+)(?:\s+|$)/);
+  if (commandMatch) {
+    const command = commandMatch[1];
+    if (command === "reset") {
+      await resetSession();
+      await sendMessage(config.token, channelId, "Global session reset. Next message starts fresh.");
+      return;
+    }
+    if (command === "voice") {
+      const isEnabled = voiceModeChannels.has(channelId);
+      if (isEnabled) {
+        voiceModeChannels.delete(channelId);
+        await sendMessage(config.token, channelId, "🔊 Voice replies OFF");
+      } else {
+        const settings = getSettings();
+        if (!settings.elevenLabs.enabled || !settings.elevenLabs.apiKey) {
+          await sendMessage(config.token, channelId, "❌ ElevenLabs not configured.");
+        } else {
+          voiceModeChannels.add(channelId);
+          await sendMessage(config.token, channelId, "🔊 Voice replies ON");
+        }
+      }
+      return;
+    }
+  }
+
   // Detect attachments
   const imageAttachments = message.attachments.filter(isImageAttachment);
   const voiceAttachments = message.attachments.filter(isVoiceAttachment);
+  const videoAttachments = message.attachments.filter(isVideoAttachment);
   const hasImage = imageAttachments.length > 0;
   const hasVoice = voiceAttachments.length > 0;
+  const hasVideo = videoAttachments.length > 0;
 
-  if (!content.trim() && !hasImage && !hasVoice) return;
+  if (!content.trim() && !hasImage && !hasVideo && !hasVoice) return;
 
   // Strip bot mention from content for cleaner prompt
   let cleanContent = content;
@@ -369,7 +407,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
   }
 
   const label = message.author.username;
-  const mediaParts = [hasImage ? "image" : "", hasVoice ? "voice" : ""].filter(Boolean);
+  const mediaParts = [hasImage ? "image" : "", hasVideo ? "video" : "", hasVoice ? "voice" : ""].filter(Boolean);
   const mediaSuffix = mediaParts.length > 0 ? ` [${mediaParts.join("+")}]` : "";
   console.log(
     `[${new Date().toLocaleTimeString()}] Discord ${label}${mediaSuffix}: "${cleanContent.slice(0, 60)}${cleanContent.length > 60 ? "..." : ""}"`,
@@ -382,6 +420,7 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     await sendTyping(config.token, channelId);
 
     let imagePath: string | null = null;
+    let videoPath: string | null = null;
     let voicePath: string | null = null;
     let voiceTranscript: string | null = null;
 
@@ -390,6 +429,38 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
         imagePath = await downloadDiscordAttachment(imageAttachments[0], "image");
       } catch (err) {
         console.error(`[Discord] Failed to download image for ${label}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // Handle video with Gemini (similar to Telegram)
+    if (hasVideo && videoAttachments.length > 0) {
+      try {
+        await sendMessage(config.token, channelId, "🎬 Analyzing video...");
+
+        const videoAttachment = videoAttachments[0];
+        const settings = getSettings();
+
+        if (settings.gemini.enabled && settings.gemini.analyzeVideo) {
+          try {
+            const gemini = new GeminiVisionAnalyzer(
+              settings.gemini.apiKey,
+              settings.gemini.model
+            );
+            const downloadedPath = await downloadDiscordAttachment(videoAttachment, "video");
+
+            const analysis = await gemini.analyzeVideo(
+              downloadedPath,
+              "Provide comprehensive analysis: visual scenes, actions, people, objects, text, and audio summary"
+            );
+
+            // Will be added to promptParts below
+            videoPath = downloadedPath;
+          } catch (error) {
+            console.error(`[Discord] Gemini video analysis failed: ${error}`);
+          }
+        }
+      } catch (err) {
+        console.error(`[Discord] Failed to process video for ${label}: ${err instanceof Error ? err.message : err}`);
       }
     }
 
@@ -416,12 +487,41 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
     // Build prompt (same pattern as Telegram)
     const promptParts = [`[Discord from ${label}]`];
     if (cleanContent.trim()) promptParts.push(`Message: ${cleanContent}`);
+
+    // Handle image with Gemini Vision
     if (imagePath) {
-      promptParts.push(`Image path: ${imagePath}`);
-      promptParts.push("The user attached an image. Inspect this image file directly before answering.");
+      const settings = getSettings();
+      if (settings.gemini.enabled && settings.gemini.analyzeImages) {
+        try {
+          const gemini = new GeminiVisionAnalyzer(
+            settings.gemini.apiKey,
+            settings.gemini.model
+          );
+          const analysis = await gemini.analyzeImage(
+            imagePath,
+            "Describe what you see in detail, including any text, objects, people, and context"
+          );
+          promptParts.push(`[Gemini Vision Analysis]`);
+          promptParts.push(analysis);
+          promptParts.push("The user attached an image. Use the Gemini analysis above.");
+        } catch (error) {
+          console.error(`[Discord] Gemini image analysis failed: ${error}`);
+          promptParts.push(`Image path: ${imagePath}`);
+          promptParts.push("The user attached an image. Gemini analysis failed, please analyze directly.");
+        }
+      } else {
+        promptParts.push(`Image path: ${imagePath}`);
+        promptParts.push("The user attached an image. Inspect this image file directly before answering.");
+      }
     } else if (hasImage) {
       promptParts.push("The user attached an image, but downloading it failed. Respond and ask them to resend.");
     }
+
+    // Handle video
+    if (videoPath) {
+      promptParts.push(`[Gemini Video Analysis - see above]`);
+    }
+
     if (voiceTranscript) {
       promptParts.push(`Voice transcript: ${voiceTranscript}`);
       promptParts.push("The user attached voice audio. Use the transcript as their spoken message.");
@@ -443,7 +543,44 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
           console.error(`[Discord] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
         });
       }
-      await sendMessage(config.token, channelId, cleanedText || "(empty response)");
+
+      // TTS handling
+      const settings = getSettings();
+      const voiceEnabled = voiceModeChannels.has(channelId) || (hasVoice && voiceTranscript);
+      const useTTS = voiceEnabled && settings.voiceApi.ttsEnabled && settings.elevenLabs.enabled;
+
+      if (useTTS) {
+        try {
+          const tts = new ElevenLabsTTSProvider(
+            settings.elevenLabs.apiKey,
+            settings.elevenLabs.voiceId,
+            settings.elevenLabs.model
+          );
+          const audioBuffer = await tts.synthesize(cleanedText || "(empty response)");
+
+          // Send audio file as attachment
+          const formData = new FormData();
+          formData.append("file", new Blob([audioBuffer], { type: "audio/mpeg" }), "voice.mp3");
+          formData.append("payload_json", JSON.stringify({ content: "" }));
+
+          await fetch(`${DISCORD_API}/channels/${channelId}/messages`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bot ${config.token}`,
+            },
+            body: formData,
+          });
+        } catch (error) {
+          console.error(`[Discord] TTS failed for ${label}: ${error}`);
+          await sendMessage(
+            config.token,
+            channelId,
+            `🔊 [Voice generation failed]\n\n${cleanedText || "(empty response)"}`
+          );
+        }
+      } else {
+        await sendMessage(config.token, channelId, cleanedText || "(empty response)");
+      }
     }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
