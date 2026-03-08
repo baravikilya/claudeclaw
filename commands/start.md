@@ -38,6 +38,9 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    - **Telegram configured** = `telegram.token` is non-empty
    - **Discord configured** = `discord.token` is non-empty
    - **Security configured** = `security.level` exists and is not `"moderate"` (the default), OR `security.allowedTools`/`security.disallowedTools` are non-empty
+   - **STT configured** = `groq.enabled` is `true` OR `openai.enabled` is `true` OR `voiceApi.sttProvider` is not `"local"`
+   - **TTS configured** = `elevenLabs.enabled` is `true` AND `elevenLabs.apiKey` is non-empty
+   - **Gemini configured** = `gemini.enabled` is `true` AND `gemini.apiKey` is non-empty
 
 4. **Interactive setup — smart mode** (BEFORE launching the daemon):
 
@@ -55,17 +58,33 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
 
 5. **Ask setup questions**:
 
-   Use **AskUserQuestion** to ask all unconfigured sections at once (up to 3 questions in one call):
+   Use **AskUserQuestion** to ask all unconfigured sections at once (up to 4 questions in one call).
+
+   **First call** — Core settings (Model, Heartbeat, Telegram, Discord):
 
    - **Model** (always ask if `model` is empty/unset): "Which Claude model should ClaudeClaw use?" (header: "Model", options: "opus (default)", "sonnet", "haiku", "glm")
    - **If heartbeat is NOT configured**: "Enable heartbeat? Example: I can remind you to drink water every 30 minutes, or you can fully customize what runs." (header: "Heartbeat", options: "Yes" / "No")
    - **If Telegram is NOT configured**: "Configure Telegram? Recommended if you want it 24/7 live." (header: "Telegram", options: "Yes" / "No")
    - **If Discord is NOT configured**: "Configure Discord? Connect your bot to Discord servers." (header: "Discord", options: "Yes" / "No")
+
+   **Second call** — Security + Voice/Vision (Security, STT, TTS, Gemini):
+
    - **If security is NOT configured**: "What security level for Claude?" (header: "Security", options:
      - "Moderate (Recommended)" (description: "Full access scoped to project directory")
      - "Locked" (description: "Read-only — can only search and read files, no edits, bash, or web")
      - "Strict" (description: "Can edit files but no bash or web access")
      - "Unrestricted" (description: "Full access with no directory restriction — dangerous"))
+   - **If STT is NOT configured**: "Speech-to-text for voice messages?" (header: "STT", options:
+     - "Local Whisper (no API, slower)" (description: "Run whisper.cpp locally, no API key needed")
+     - "Groq (cloud, faster)" (description: "Use Groq API for faster transcription")
+     - "OpenAI Whisper" (description: "Use OpenAI Whisper API")
+     - "Skip" (description: "No voice message support"))
+   - **If TTS is NOT configured**: "Enable voice replies via ElevenLabs?" (header: "TTS", options:
+     - "Yes" (description: "Claude will reply with voice messages")
+     - "Skip" (description: "Text-only replies"))
+   - **If Gemini is NOT configured**: "Configure Gemini for image/video analysis?" (header: "Vision", options:
+     - "Yes" (description: "Enable image and video analysis in Telegram/Discord")
+     - "Skip" (description: "No vision support"))
 
    Then, based on their answers:
 
@@ -100,6 +119,23 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
    - **If security is "Strict" or "Locked"**: Use AskUserQuestion to ask:
      - "Allow any specific tools on top of the security level? (e.g. Bash(git:*) to allow only git commands)" (header: "Allow tools", options: "None — use level defaults (Recommended)", "Bash(git:*) — git only", "Bash(git:*) Bash(npm:*) — git + npm")
      - If they pick an option with tools or type custom ones, set `security.allowedTools` to the list.
+
+   - **STT (Speech-to-Text) handling**:
+     - If "Local Whisper": Set `voiceApi.sttProvider` to `"local"`. No API key needed.
+     - If "Groq": Ask in normal free-form text for Groq API key (hint: get it from https://console.groq.com/keys). Set `voiceApi.sttProvider` to `"groq"`, `groq.enabled` to `true`, and `groq.apiKey` to the provided key. Set `groq.model` to `"whisper-large-v3"`.
+     - If "OpenAI Whisper": Ask in normal free-form text for OpenAI API key (hint: get it from https://platform.openai.com/api-keys). Set `voiceApi.sttProvider` to `"openai"`, `openai.enabled` to `true`, and `openai.apiKey` to the provided key. Set `openai.model` to `"whisper-1"`.
+     - If "Skip": Set `voiceApi.sttProvider` to `"local"` (default).
+
+   - **TTS (Text-to-Speech) handling**:
+     - If "Yes": Ask in normal free-form text for two values:
+       - ElevenLabs API key (hint: get it from https://elevenlabs.io/app/settings/api-keys)
+       - Voice ID (hint: use `elevenlabs` CLI or https://elevenlabs.io/app/voice-lab to find voice IDs, default: "21m00Tcm4TlvDq8ikWAM")
+       - Set `voiceApi.ttsEnabled` to `true`, `elevenLabs.enabled` to `true`, `elevenLabs.apiKey` to the provided key, `elevenLabs.voiceId` to the voice ID, and `elevenLabs.model` to `"eleven_turbo_v2_5"`.
+     - If "Skip": Set `voiceApi.ttsEnabled` to `false` (default).
+
+   - **Gemini (Vision/Video) handling**:
+     - If "Yes": Ask in normal free-form text for Gemini API key (hint: get it from https://aistudio.google.com/app/apikey). Set `gemini.enabled` to `true`, `gemini.apiKey` to the provided key, `gemini.model` to `"gemini-2.5-flash"`, `gemini.analyzeImages` to `true`, and `gemini.analyzeVideo` to `true`.
+     - If "Skip": Set `gemini.enabled` to `false` (default).
 
    Update `.claude/claudeclaw/settings.json` with their answers.
 
@@ -186,6 +222,34 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
     "level": "moderate",
     "allowedTools": [],
     "disallowedTools": []
+  },
+  "voiceApi": {
+    "sttProvider": "groq",
+    "ttsEnabled": true
+  },
+  "groq": {
+    "enabled": true,
+    "apiKey": "GROQ_API_KEY",
+    "model": "whisper-large-v3"
+  },
+  "openai": {
+    "enabled": false,
+    "apiKey": "OPENAI_API_KEY",
+    "model": "whisper-1"
+  },
+  "elevenLabs": {
+    "enabled": true,
+    "apiKey": "ELEVENLABS_API_KEY",
+    "voiceId": "21m00Tcm4TlvDq8ikWAM",
+    "model": "eleven_turbo_v2_5",
+    "ttsEnabled": true
+  },
+  "gemini": {
+    "enabled": true,
+    "apiKey": "GEMINI_API_KEY",
+    "model": "gemini-2.5-flash",
+    "analyzeImages": true,
+    "analyzeVideo": true
   }
 }
 ```
@@ -205,6 +269,24 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
 - `security.level` — one of: `locked`, `strict`, `moderate`, `unrestricted`
 - `security.allowedTools` — extra tools to allow on top of the level (e.g. `["Bash(git:*)"]`)
 - `security.disallowedTools` — tools to block on top of the level
+- `voiceApi.sttProvider` — speech-to-text provider: `"local"` (whisper.cpp), `"groq"`, or `"openai"`
+- `voiceApi.ttsEnabled` — whether text-to-speech is enabled via ElevenLabs
+- `groq.enabled` — whether Groq STT is enabled
+- `groq.apiKey` — Groq API key for Whisper transcription (get from https://console.groq.com/keys)
+- `groq.model` — Whisper model to use (default: `"whisper-large-v3"`)
+- `openai.enabled` — whether OpenAI Whisper STT is enabled
+- `openai.apiKey` — OpenAI API key for Whisper transcription (get from https://platform.openai.com/api-keys)
+- `openai.model` — Whisper model to use (default: `"whisper-1"`)
+- `elevenLabs.enabled` — whether ElevenLabs TTS is enabled
+- `elevenLabs.apiKey` — ElevenLabs API key for voice synthesis (get from https://elevenlabs.io/app/settings/api-keys)
+- `elevenLabs.voiceId` — ElevenLabs voice ID to use (default: `"21m00Tcm4TlvDq8ikWAM"`)
+- `elevenLabs.model` — TTS model to use (default: `"eleven_turbo_v2_5"`)
+- `elevenLabs.ttsEnabled` — whether TTS is enabled (same as `voiceApi.ttsEnabled`)
+- `gemini.enabled` — whether Gemini vision/video analysis is enabled
+- `gemini.apiKey` — Gemini API key for image/video analysis (get from https://aistudio.google.com/app/apikey)
+- `gemini.model` — Gemini model to use (default: `"gemini-2.5-flash"`)
+- `gemini.analyzeImages` — whether to analyze images in Telegram/Discord messages
+- `gemini.analyzeVideo` — whether to analyze video files in Telegram/Discord messages
 
 ### Security Levels
 All levels run without permission prompts (headless). Security is enforced via tool restrictions and project-directory scoping.
