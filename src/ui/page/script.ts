@@ -1102,17 +1102,17 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
     }
 
     async function testSttConnection(provider: "groq" | "openai") {
-      const statusEl = $(`${provider}-status`);
+      const statusEl = $(\`\${provider}-status`);
       statusEl.textContent = "Testing...";
 
-      const apiKey = $(`${provider}-api-key`).value;
+      const apiKey = $(\`\${provider}-api-key`).value;
       if (!apiKey) {
         statusEl.textContent = "Please enter API key first";
         return;
       }
 
       try {
-        const response = await fetch(`/api/settings/${provider}`, {
+        const response = await fetch(\`/api/settings/\${provider}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1257,3 +1257,4 @@ export const pageScript = String.raw`    const $ = (id) => document.getElementBy
         }),
       ]);
     }
+  `;
