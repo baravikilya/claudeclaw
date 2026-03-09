@@ -369,7 +369,6 @@ export async function transcribeAudioToText(
       log(`voice transcribe: using ${sttProvider.name} STT provider`);
 
       return await sttProvider.transcribe(inputPath, {
-        language: "en",
         debug: options?.debug,
         log,
       });

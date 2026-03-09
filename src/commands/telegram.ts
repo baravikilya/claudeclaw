@@ -750,9 +750,9 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         });
       }
 
-      // Determine if we should send voice reply
+      // Determine if we should send voice reply (only when explicitly enabled via /voice command)
       const settings = getSettings();
-      const voiceEnabled = voiceModeChats.has(chatId) || (hasVoice && voiceTranscript);
+      const voiceEnabled = voiceModeChats.has(chatId);
       const useTTS = voiceEnabled && settings.voiceApi.ttsEnabled && settings.elevenLabs.enabled;
 
       if (useTTS) {

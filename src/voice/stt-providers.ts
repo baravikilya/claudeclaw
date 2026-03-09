@@ -62,7 +62,7 @@ export class GroqSTTProvider implements STTProvider {
         formData.append("language", options.language);
       }
 
-      const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
+      const response = await fetch(this.baseUrl, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${this.apiKey}`,
