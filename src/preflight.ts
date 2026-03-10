@@ -398,6 +398,51 @@ function installOfficialPlugins(
   return { installed, skipped };
 }
 
+// ── Patch third-party plugin hooks ──────────────────────────────────
+
+/**
+ * Patches the superpowers plugin to not fire its SessionStart hook on
+ * `--resume` invocations. Without this, the full skills list (~2-3k tokens)
+ * is injected into every Telegram message because ClaudeClaw uses --resume
+ * for each incoming message.
+ *
+ * Safe to run on every daemon start — idempotent, finds the current installed
+ * version dynamically so it re-patches after superpowers updates.
+ */
+function patchSuperpowersHooks(): void {
+  const instData = readJSON<InstalledPlugins>(INST_FILE, { version: 2, plugins: {} });
+
+  for (const [key, entries] of Object.entries(instData.plugins)) {
+    if (!key.startsWith("superpowers@")) continue;
+
+    for (const entry of entries) {
+      const hooksPath = join(entry.installPath, "hooks", "hooks.json");
+      if (!existsSync(hooksPath)) continue;
+
+      try {
+        const hooks = readJSON<{ hooks: Record<string, unknown[]> }>(hooksPath, { hooks: {} });
+        let patched = false;
+
+        for (const hookList of Object.values(hooks.hooks)) {
+          for (const hookGroup of hookList as Array<{ matcher?: string }>) {
+            if (typeof hookGroup.matcher === "string" && hookGroup.matcher.split("|").includes("resume")) {
+              hookGroup.matcher = hookGroup.matcher.split("|").filter((m) => m !== "resume").join("|");
+              patched = true;
+            }
+          }
+        }
+
+        if (patched) {
+          writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+          console.log(`preflight: patched superpowers hooks — removed 'resume' from SessionStart matcher`);
+        }
+      } catch (err: unknown) {
+        console.warn(`preflight: could not patch superpowers hooks at ${hooksPath}:`, err);
+      }
+    }
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 export function preflight(projectPath: string): void {
@@ -436,6 +481,7 @@ export function preflight(projectPath: string): void {
   skipped += official.skipped;
 
   console.log(`preflight: ${installed} installed, ${skipped} skipped`);
+  patchSuperpowersHooks();
 }
 
 // Allow standalone: bun run src/preflight.ts [project-path]
