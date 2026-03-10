@@ -22,7 +22,7 @@ export interface RunResult {
   exitCode: number;
 }
 
-const RATE_LIMIT_PATTERN = /you(?:’)ve hit your limit/i;
+const RATE_LIMIT_PATTERN = /you[‘\u2019]ve hit your limit/i;
 
 const BROKEN_SESSION_PATTERNS = [
   "Invalid `signature` in `thinking` block",
