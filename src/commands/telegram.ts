@@ -88,6 +88,27 @@ function markdownToTelegramHtml(text: string): string {
 
 const API_BASE = "https://api.telegram.org/bot";
 const FILE_API_BASE = "https://api.telegram.org/file/bot";
+const SETTINGS_FILE_PATH = join(process.cwd(), ".claude", "claudeclaw", "settings.json");
+
+async function applyModelToSettings(model: string): Promise<void> {
+  const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
+  raw.model = model;
+  await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
+  await loadSettings();
+}
+
+async function registerBotCommands(token: string): Promise<void> {
+  await callApi(token, "setMyCommands", {
+    commands: [
+      { command: "start", description: "Начало работы" },
+      { command: "reset", description: "Сбросить историю сессии" },
+      { command: "voice", description: "Вкл/выкл голосовые ответы" },
+      { command: "model", description: "Показать или сменить модель" },
+    ],
+  }).catch((err) => {
+    console.warn(`[Telegram] setMyCommands failed: ${err instanceof Error ? err.message : err}`);
+  });
+}
 
 interface TelegramUser {
   id: number;
@@ -554,6 +575,39 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
+  if (command === "/model") {
+    const argText = text?.replace(/^\/model(@\S+)?\s*/i, "").trim() ?? "";
+    if (argText) {
+      await applyModelToSettings(argText);
+      await sendMessage(config.token, chatId, `✅ Модель изменена на: ${argText}`, threadId);
+      return;
+    }
+    const currentModel = getSettings().model || "(по умолчанию)";
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: "Sonnet 4.6", callback_data: "model:claude-sonnet-4-6" },
+          { text: "Haiku 4.5", callback_data: "model:claude-haiku-4-5-20251001" },
+        ],
+        [
+          { text: "Opus 4.6", callback_data: "model:claude-opus-4-6" },
+          { text: "GLM (zhipu.ai)", callback_data: "model:glm" },
+        ],
+        [
+          { text: "Сбросить (по умолчанию)", callback_data: "model:" },
+        ],
+      ],
+    };
+    await callApi(config.token, "sendMessage", {
+      chat_id: chatId,
+      text: `Текущая модель: <code>${currentModel}</code>\n\nВыбери из списка или отправь <code>/model название</code>:`,
+      parse_mode: "HTML",
+      reply_markup: inlineKeyboard,
+      ...(threadId ? { message_thread_id: threadId } : {}),
+    });
+    return;
+  }
+
   // Secretary: detect reply to a bot alert message → treat as custom reply
   const replyToMsgId = message.reply_to_message?.message_id;
   if (replyToMsgId && text && botId && message.reply_to_message?.from?.id === botId) {
@@ -822,6 +876,33 @@ async function handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> 
     return;
   }
 
+  // Model switching: "model:<name>"
+  if (data.startsWith("model:")) {
+    const modelName = data.slice(6);
+    const displayName = modelName || "(по умолчанию)";
+    try {
+      await applyModelToSettings(modelName);
+      if (query.message) {
+        await callApi(config.token, "editMessageText", {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: `✅ Модель установлена: <code>${displayName}</code>`,
+          parse_mode: "HTML",
+        }).catch(() => {});
+      }
+      await callApi(config.token, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: `✅ ${displayName}`,
+      }).catch(() => {});
+    } catch (err) {
+      await callApi(config.token, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: `❌ ${err instanceof Error ? err.message : err}`,
+      }).catch(() => {});
+    }
+    return;
+  }
+
   // Default: ack with no text
   await callApi(config.token, "answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 }
@@ -840,6 +921,7 @@ async function poll(): Promise<void> {
       botId = me.result.id;
       console.log(`  Bot: ${botUsername ? `@${botUsername}` : botId}`);
       console.log(`  Group privacy: ${me.result.can_read_all_group_messages ? "disabled (reads all messages)" : "enabled (commands & mentions only)"}`);
+      await registerBotCommands(config.token);
     }
   } catch (err) {
     console.error(`[Telegram] getMe failed: ${err instanceof Error ? err.message : err}`);
