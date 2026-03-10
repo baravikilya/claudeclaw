@@ -263,6 +263,26 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   ];
   if (promptContent) appendParts.push(promptContent);
 
+  // Inject claude-mem context on new sessions
+  if (isNew) {
+    try {
+      const claudeMemDir = join(process.env.HOME ?? "/root", ".claude/plugins/cache/thedotmack/claude-mem/10.5.2/scripts");
+      const memProc = Bun.spawn(
+        ["bun", join(claudeMemDir, "bun-runner.js"), join(claudeMemDir, "worker-service.cjs"), "hook", "claude-code", "context"],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+      const memOutput = await new Response(memProc.stdout).text();
+      const memJson = JSON.parse(memOutput);
+      const memContext = memJson?.hookSpecificOutput?.additionalContext;
+      if (memContext) {
+        appendParts.push(memContext);
+        console.log(`[${new Date().toLocaleTimeString()}] claude-mem context injected (${memContext.length} chars)`);
+      }
+    } catch (e) {
+      console.warn(`[${new Date().toLocaleTimeString()}] claude-mem context injection skipped:`, e);
+    }
+  }
+
   // Load the project's CLAUDE.md if it exists
   if (existsSync(PROJECT_CLAUDE_MD)) {
     try {
