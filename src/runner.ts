@@ -329,12 +329,20 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   const primaryRateLimit = extractRateLimitMessage(exec.rawStdout, exec.stderr);
   let usedFallback = false;
 
-  if (primaryRateLimit && hasModelConfig(fallbackConfig) && !sameModelConfig(primaryConfig, fallbackConfig)) {
-    console.warn(
-      `[${new Date().toLocaleTimeString()}] Claude limit reached; retrying with fallback${fallbackConfig.model ? ` (${fallbackConfig.model})` : ""}...`
-    );
-    exec = await runClaudeOnce(args, fallbackConfig.model, fallbackConfig.api, baseEnv);
-    usedFallback = true;
+  if (primaryRateLimit) {
+    const hasFallback = hasModelConfig(fallbackConfig);
+    const isDifferent = !sameModelConfig(primaryConfig, fallbackConfig);
+    if (hasFallback && isDifferent) {
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Claude limit reached; retrying with fallback${fallbackConfig.model ? ` (${fallbackConfig.model})` : ""}...`
+      );
+      exec = await runClaudeOnce(args, fallbackConfig.model, fallbackConfig.api, baseEnv);
+      usedFallback = true;
+    } else {
+      console.warn(
+        `[${new Date().toLocaleTimeString()}] Claude limit reached; fallback skipped (hasFallback=${hasFallback}, isDifferent=${isDifferent}, fallbackModel="${fallbackConfig.model}")`
+      );
+    }
   }
 
   const rawStdout = exec.rawStdout;
