@@ -29,6 +29,13 @@ const BROKEN_SESSION_PATTERNS = [
   "invalid_request_error",
 ];
 
+// Auth errors on a resumed session mean the provider doesn't know the old session ID
+// (e.g. switching from Claude to GLM). Retry without --resume so the new provider
+// can start a fresh session. Only applies when resuming — not on new sessions.
+const AUTH_ERROR_PATTERNS = [
+  "Failed to authenticate",
+];
+
 // Serial queue — prevents concurrent --resume on the same session
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -243,7 +250,13 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   const logFile = join(LOGS_DIR, `${name}-${timestamp}.log`);
 
   const { security, model, api, fallback } = getSettings();
-  const primaryConfig: ModelConfig = { model, api };
+  // When GLM is set as primary but the primary api key is empty,
+  // fall back to fallback.api (where the GLM key is typically stored).
+  const resolvedPrimaryApi =
+    model.trim().toLowerCase() === "glm" && !api.trim() && fallback?.api?.trim()
+      ? fallback.api
+      : api;
+  const primaryConfig: ModelConfig = { model, api: resolvedPrimaryApi };
   const fallbackConfig: ModelConfig = {
     model: fallback?.model ?? "",
     api: fallback?.api ?? "",
@@ -317,7 +330,12 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   // Check for broken session patterns
   const isBrokenSession =
     exec.exitCode !== 0 &&
-    BROKEN_SESSION_PATTERNS.some((p) => exec.rawStdout.includes(p) || exec.stderr.includes(p));
+    (
+      BROKEN_SESSION_PATTERNS.some((p) => exec.rawStdout.includes(p) || exec.stderr.includes(p)) ||
+      // Auth errors on a resumed session: provider doesn't know the old session ID.
+      // Retry fresh so the new provider can start its own session.
+      (!isNew && AUTH_ERROR_PATTERNS.some((p) => exec.rawStdout.includes(p) || exec.stderr.includes(p)))
+    );
 
   if (isBrokenSession) {
     console.warn(`[${new Date().toLocaleTimeString()}] Broken session detected, resetting...`);

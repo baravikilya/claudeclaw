@@ -1,6 +1,6 @@
 {
   "name": "claudeclaw",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",

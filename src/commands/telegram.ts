@@ -84,6 +84,28 @@ function markdownToTelegramHtml(text: string): string {
   return text;
 }
 
+const SETTINGS_FILE_PATH = join(process.cwd(), ".claude", "claudeclaw", "settings.json");
+
+async function applyModelToSettings(model: string): Promise<void> {
+  const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
+  raw.model = model;
+  await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
+  await loadSettings();
+}
+
+async function registerBotCommands(token: string): Promise<void> {
+  await callApi(token, "setMyCommands", {
+    commands: [
+      { command: "start", description: "Начало работы" },
+      { command: "reset", description: "Сбросить историю сессии" },
+      { command: "voice", description: "Вкл/выкл голосовые ответы" },
+      { command: "model", description: "Показать или сменить модель" },
+    ],
+  }).catch((err) => {
+    console.warn(`[Telegram] setMyCommands failed: ${err instanceof Error ? err.message : err}`);
+  });
+}
+
 // --- Telegram Bot API (raw fetch, zero deps) ---
 
 const API_BASE = "https://api.telegram.org/bot";
@@ -999,5 +1021,7 @@ export function startPolling(debug = false): void {
 export async function telegram() {
   await loadSettings();
   await ensureProjectClaudeMd();
+  const config = getSettings().telegram;
+  if (config.token) await registerBotCommands(config.token);
   await poll();
 }
