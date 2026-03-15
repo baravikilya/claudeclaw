@@ -30,9 +30,9 @@ const DEFAULT_SETTINGS: Settings = {
   web: { enabled: false, host: "127.0.0.1", port: 4632 },
   stt: { baseUrl: "", model: "" },
   // New Voice API settings
-  voiceApi: { sttProvider: "local", ttsEnabled: false },
+  voiceApi: { sttProvider: "local", ttsEnabled: false, ttsProvider: "disabled" },
   groq: { enabled: false, apiKey: "", model: "whisper-large-v3" },
-  openai: { enabled: false, apiKey: "", model: "whisper-1" },
+  openai: { enabled: false, apiKey: "", model: "whisper-1", ttsModel: "tts-1", ttsVoice: "alloy" },
   elevenLabs: { enabled: false, apiKey: "", voiceId: "", model: "eleven_turbo_v2_5" },
   gemini: { enabled: false, apiKey: "", model: "gemini-2.5-flash", analyzeImages: false, analyzeVideo: false },
 };
@@ -120,6 +120,8 @@ export interface VoiceApiConfig {
   sttProvider: "local" | "groq" | "openai";
   /** Enable TTS (voice replies) */
   ttsEnabled: boolean;
+  /** Which TTS provider to use: 'disabled', 'openai', or 'elevenlabs' */
+  ttsProvider: "disabled" | "openai" | "elevenlabs";
 }
 
 // Groq STT configuration
@@ -129,11 +131,15 @@ export interface GroqConfig {
   model: string;
 }
 
-// OpenAI STT configuration
+// OpenAI STT/TTS configuration
 export interface OpenAIConfig {
   enabled: boolean;
   apiKey: string;
   model: string;
+  /** TTS model: 'tts-1' (low latency) or 'tts-1-hd' (high quality) */
+  ttsModel?: string;
+  /** TTS voice: 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer' */
+  ttsVoice?: string;
 }
 
 // ElevenLabs TTS configuration

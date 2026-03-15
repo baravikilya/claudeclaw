@@ -2,7 +2,7 @@ import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
 import { getSettings, loadSettings, reloadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
-import { ElevenLabsTTSProvider } from "../voice/tts-providers";
+import { createTTSProvider } from "../voice/tts-providers";
 import { GeminiVisionAnalyzer } from "../vision/gemini";
 import { resolveSkillPrompt, listSkills } from "../skills";
 import { mkdir } from "node:fs/promises";
@@ -99,6 +99,15 @@ async function applyModelToSettings(model: string): Promise<void> {
   await reloadSettings();
   // Then reset session so a fresh session is created with the new model
   await resetSession();
+}
+
+async function applyTTSProviderToSettings(provider: string): Promise<void> {
+  const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
+  if (!raw.voiceApi) raw.voiceApi = {};
+  raw.voiceApi.ttsProvider = provider;
+  await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
+  // Update settings cache (no session reset needed for TTS change)
+  await reloadSettings();
 }
 
 // --- Telegram Bot API (raw fetch, zero deps) ---
@@ -572,10 +581,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     const argText = text?.replace(/^\/model(@\S+)?\s*/i, "").trim() ?? "";
     if (argText) {
       await applyModelToSettings(argText);
-      await sendMessage(config.token, chatId, `✅ Модель изменена на: ${argText}`, threadId);
+      await sendMessage(config.token, chatId, `✅ Model changed to: ${argText}`, threadId);
       return;
     }
-    const currentModel = getSettings().model || "(по умолчанию)";
+    const currentModel = getSettings().model || "(default)";
     const inlineKeyboard = {
       inline_keyboard: [
         [
@@ -587,13 +596,43 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           { text: "GLM (zhipu.ai)", callback_data: "model:glm" },
         ],
         [
-          { text: "Сбросить (по умолчанию)", callback_data: "model:" },
+          { text: "Reset (default)", callback_data: "model:" },
         ],
       ],
     };
     await callApi(config.token, "sendMessage", {
       chat_id: chatId,
-      text: `Текущая модель: <code>${currentModel}</code>\n\nВыбери из списка или отправь <code>/model название</code>:`,
+      text: `Current model: <code>${currentModel}</code>\n\nChoose from list or send <code>/model name</code>:`,
+      parse_mode: "HTML",
+      reply_markup: inlineKeyboard,
+      ...(threadId ? { message_thread_id: threadId } : {}),
+    });
+    return;
+  }
+
+  if (command === "/tts") {
+    const argText = text?.replace(/^\/tts(@\S+)?\s*/i, "").trim() ?? "";
+    if (argText && ["openai", "elevenlabs", "disabled"].includes(argText)) {
+      await applyTTSProviderToSettings(argText);
+      const displayName = argText === "disabled" ? "Disabled" : argText === "openai" ? "OpenAI" : "ElevenLabs";
+      await sendMessage(config.token, chatId, `✅ TTS provider changed to: ${displayName}`, threadId);
+      return;
+    }
+    const currentTTS = getSettings().voiceApi?.ttsProvider || "disabled";
+    const inlineKeyboard = {
+      inline_keyboard: [
+        [
+          { text: "OpenAI", callback_data: "tts:openai" },
+          { text: "ElevenLabs", callback_data: "tts:elevenlabs" },
+        ],
+        [
+          { text: "Disabled", callback_data: "tts:disabled" },
+        ],
+      ],
+    };
+    await callApi(config.token, "sendMessage", {
+      chat_id: chatId,
+      text: `Current TTS provider: <code>${currentTTS}</code>\n\nChoose from list or send <code>/tts provider</code>:`,
       parse_mode: "HTML",
       reply_markup: inlineKeyboard,
       ...(threadId ? { message_thread_id: threadId } : {}),
@@ -821,16 +860,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       // Determine if we should send voice reply (only when explicitly enabled via /voice command)
       const settings = getSettings();
       const voiceEnabled = voiceModeChats.has(chatId);
-      const useTTS = voiceEnabled && settings.voiceApi.ttsEnabled && settings.elevenLabs.enabled;
+      const ttsProvider = createTTSProvider(settings);
+      const useTTS = voiceEnabled && settings.voiceApi.ttsEnabled && ttsProvider !== null;
 
-      if (useTTS) {
+      if (useTTS && ttsProvider) {
         try {
-          const tts = new ElevenLabsTTSProvider(
-            settings.elevenLabs.apiKey,
-            settings.elevenLabs.voiceId,
-            settings.elevenLabs.model
-          );
-          const audioBuffer = await tts.synthesize(cleanedText || "(empty response)");
+          const audioBuffer = await ttsProvider.synthesize(cleanedText || "(empty response)");
           await sendVoiceMessage(config.token, chatId, audioBuffer, threadId);
         } catch (error) {
           console.error(`[Telegram] TTS failed for ${label}: ${error}`);
@@ -893,14 +928,41 @@ async function handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> 
   // Model switching: "model:<name>"
   if (data.startsWith("model:")) {
     const modelName = data.slice(6);
-    const displayName = modelName || "(по умолчанию)";
+    const displayName = modelName || "(default)";
     try {
       await applyModelToSettings(modelName);
       if (query.message) {
         await callApi(config.token, "editMessageText", {
           chat_id: query.message.chat.id,
           message_id: query.message.message_id,
-          text: `✅ Модель установлена: <code>${displayName}</code>`,
+          text: `✅ Model set to: <code>${displayName}</code>`,
+          parse_mode: "HTML",
+        }).catch(() => {});
+      }
+      await callApi(config.token, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: `✅ ${displayName}`,
+      }).catch(() => {});
+    } catch (err) {
+      await callApi(config.token, "answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: `❌ ${err instanceof Error ? err.message : err}`,
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  // TTS provider switching: "tts:<provider>"
+  if (data.startsWith("tts:")) {
+    const provider = data.slice(4);
+    const displayName = provider === "openai" ? "OpenAI" : provider === "elevenlabs" ? "ElevenLabs" : "Disabled";
+    try {
+      await applyTTSProviderToSettings(provider);
+      if (query.message) {
+        await callApi(config.token, "editMessageText", {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          text: `✅ TTS set to: <code>${displayName}</code>`,
           parse_mode: "HTML",
         }).catch(() => {});
       }
@@ -927,10 +989,11 @@ async function registerBotCommands(token: string): Promise<void> {
   try {
     const skills = await listSkills();
     const commands = [
-      { command: "start", description: "Начало работы" },
-      { command: "reset", description: "Сбросить историю сессии" },
-      { command: "voice", description: "Вкл/выкл голосовые ответы" },
-      { command: "model", description: "Показать или сменить модель" },
+      { command: "start", description: "Get started" },
+      { command: "reset", description: "Reset session history" },
+      { command: "voice", description: "Toggle voice replies" },
+      { command: "model", description: "Show or change model" },
+      { command: "tts", description: "Show or change TTS provider" },
     ];
     for (const skill of skills) {
       // Telegram commands: 1-32 chars, lowercase a-z, 0-9, underscores only
@@ -939,7 +1002,7 @@ async function registerBotCommands(token: string): Promise<void> {
         .replace(/[-.:]/g, "_")
         .replace(/[^a-z0-9_]/g, "")
         .slice(0, 32);
-      if (!cmd || cmd === "start" || cmd === "reset" || cmd === "voice" || cmd === "model") continue;
+      if (!cmd || cmd === "start" || cmd === "reset" || cmd === "voice" || cmd === "model" || cmd === "tts") continue;
       if (cmd.length > 30) continue;
       const desc = skill.description.length >= 3
         ? skill.description.slice(0, 256)
