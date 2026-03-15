@@ -4,6 +4,7 @@ import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
 import { ElevenLabsTTSProvider } from "../voice/tts-providers";
 import { GeminiVisionAnalyzer } from "../vision/gemini";
+import { resolveSkillPrompt } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 
@@ -243,6 +244,10 @@ function guildTriggerReason(message: DiscordMessage): string | null {
 
   // Mention in content (fallback)
   if (botUserId && message.content.includes(`<@${botUserId}>`)) return "mention_in_content";
+
+  // Listen channel (respond to all messages, no mention needed)
+  const config = getSettings().discord;
+  if (config.listenChannels.includes(message.channel_id)) return "listen_channel";
 
   return null;
 }
@@ -484,9 +489,30 @@ async function handleMessageCreate(token: string, message: DiscordMessage): Prom
       }
     }
 
+    // Skill routing: detect slash commands and resolve to SKILL.md prompts
+    const command = cleanContent.startsWith("/") ? cleanContent.trim().split(/\s+/, 1)[0].toLowerCase() : null;
+    let skillContext: string | null = null;
+    if (command) {
+      try {
+        skillContext = await resolveSkillPrompt(command);
+        if (skillContext) {
+          debugLog(`Skill resolved for ${command}: ${skillContext.length} chars`);
+        }
+      } catch (err) {
+        debugLog(`Skill resolution failed for ${command}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     // Build prompt (same pattern as Telegram)
     const promptParts = [`[Discord from ${label}]`];
-    if (cleanContent.trim()) promptParts.push(`Message: ${cleanContent}`);
+    if (skillContext) {
+      const args = cleanContent.trim().slice(command!.length).trim();
+      promptParts.push(`<command-name>${command}</command-name>`);
+      promptParts.push(skillContext);
+      if (args) promptParts.push(`User arguments: ${args}`);
+    } else if (cleanContent.trim()) {
+      promptParts.push(`Message: ${cleanContent}`);
+    }
 
     // Handle image with Gemini Vision
     if (imagePath) {
@@ -950,6 +976,9 @@ export function startGateway(debug = false): void {
   running = true;
   console.log("Discord bot started (gateway)");
   console.log(`  Allowed users: ${config.allowedUserIds.length === 0 ? "all" : config.allowedUserIds.join(", ")}`);
+  if (config.listenChannels.length > 0) {
+    console.log(`  Listen channels: ${config.listenChannels.join(", ")}`);
+  }
   if (discordDebug) console.log("  Debug: enabled");
 
   (async () => {

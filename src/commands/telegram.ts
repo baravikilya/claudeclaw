@@ -1,9 +1,10 @@
 import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
-import { getSettings, loadSettings } from "../config";
+import { getSettings, loadSettings, reloadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
 import { ElevenLabsTTSProvider } from "../voice/tts-providers";
 import { GeminiVisionAnalyzer } from "../vision/gemini";
+import { resolveSkillPrompt, listSkills } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 
@@ -90,20 +91,7 @@ async function applyModelToSettings(model: string): Promise<void> {
   const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
   raw.model = model;
   await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
-  await loadSettings();
-}
-
-async function registerBotCommands(token: string): Promise<void> {
-  await callApi(token, "setMyCommands", {
-    commands: [
-      { command: "start", description: "Начало работы" },
-      { command: "reset", description: "Сбросить историю сессии" },
-      { command: "voice", description: "Вкл/выкл голосовые ответы" },
-      { command: "model", description: "Показать или сменить модель" },
-    ],
-  }).catch((err) => {
-    console.warn(`[Telegram] setMyCommands failed: ${err instanceof Error ? err.message : err}`);
-  });
+  await reloadSettings();
 }
 
 // --- Telegram Bot API (raw fetch, zero deps) ---
@@ -745,9 +733,30 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       }
     }
 
+    // Skill routing: resolve slash commands to SKILL.md prompts
+    let skillContext: string | null = null;
+    if (command && command !== "/start" && command !== "/reset") {
+      try {
+        skillContext = await resolveSkillPrompt(command);
+        if (skillContext) {
+          debugLog(`Skill resolved for ${command}: ${skillContext.length} chars`);
+        }
+      } catch (err) {
+        debugLog(`Skill resolution failed for ${command}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
     const promptParts = [`[Telegram from ${label}]`];
     if (threadId) promptParts.push(`[thread:${threadId}]`);
-    if (text.trim()) promptParts.push(`Message: ${text}`);
+    if (skillContext) {
+      // Strip the slash command from the message text and pass remaining args
+      const args = text.trim().slice(command!.length).trim();
+      promptParts.push(`<command-name>${command}</command-name>`);
+      promptParts.push(skillContext);
+      if (args) promptParts.push(`User arguments: ${args}`);
+    } else if (text.trim()) {
+      promptParts.push(`Message: ${text}`);
+    }
 
     // Handle image with Gemini Vision API
     if (imagePath) {
@@ -905,6 +914,39 @@ async function handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> 
   await callApi(config.token, "answerCallbackQuery", { callback_query_id: query.id }).catch(() => {});
 }
 
+// --- Bot command menu registration ---
+
+async function registerBotCommands(token: string): Promise<void> {
+  try {
+    const skills = await listSkills();
+    const commands = [
+      { command: "start", description: "Начало работы" },
+      { command: "reset", description: "Сбросить историю сессии" },
+      { command: "voice", description: "Вкл/выкл голосовые ответы" },
+      { command: "model", description: "Показать или сменить модель" },
+    ];
+    for (const skill of skills) {
+      // Telegram commands: 1-32 chars, lowercase a-z, 0-9, underscores only
+      const cmd = skill.name
+        .toLowerCase()
+        .replace(/[-.:]/g, "_")
+        .replace(/[^a-z0-9_]/g, "")
+        .slice(0, 32);
+      if (!cmd || cmd === "start" || cmd === "reset" || cmd === "voice" || cmd === "model") continue;
+      if (cmd.length > 30) continue;
+      const desc = skill.description.length >= 3
+        ? skill.description.slice(0, 256)
+        : `Run ${skill.name} skill`;
+      commands.push({ command: cmd, description: desc });
+    }
+    if (commands.length > 100) commands.length = 100;
+    await callApi(token, "setMyCommands", { commands });
+    console.log(`  Commands registered: ${commands.length} (${commands.map((c) => "/" + c.command).join(", ")})`);
+  } catch (err) {
+    console.error(`[Telegram] Failed to register commands: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 // --- Polling loop ---
 
 let running = true;
@@ -997,7 +1039,5 @@ export function startPolling(debug = false): void {
 export async function telegram() {
   await loadSettings();
   await ensureProjectClaudeMd();
-  const config = getSettings().telegram;
-  if (config.token) await registerBotCommands(config.token);
   await poll();
 }

@@ -22,14 +22,14 @@ export interface RunResult {
   exitCode: number;
 }
 
-const RATE_LIMIT_PATTERN = /you[‘\u2019]ve hit your limit/i;
+const RATE_LIMIT_PATTERN = /you.ve hit your limit|out of extra usage/i;
 
 const BROKEN_SESSION_PATTERNS = [
   "Invalid `signature` in `thinking` block",
   "invalid_request_error",
 ];
 
-// Auth errors on a resumed session mean the provider doesn't know the old session ID
+// Auth errors on a resumed session mean the provider doesn’t know the old session ID
 // (e.g. switching from Claude to GLM). Retry without --resume so the new provider
 // can start a fresh session. Only applies when resuming — not on new sessions.
 const AUTH_ERROR_PATTERNS = [
