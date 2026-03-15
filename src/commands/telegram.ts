@@ -95,9 +95,10 @@ async function applyModelToSettings(model: string): Promise<void> {
   const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
   raw.model = model;
   await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
-  // Reset session when model changes so the new model is used from scratch
-  await resetSession();
+  // Update settings cache immediately so next execClaude sees the new model
   await reloadSettings();
+  // Then reset session so a fresh session is created with the new model
+  await resetSession();
 }
 
 // --- Telegram Bot API (raw fetch, zero deps) ---
