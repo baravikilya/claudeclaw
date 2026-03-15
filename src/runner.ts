@@ -74,11 +74,16 @@ function buildChildEnv(baseEnv: Record<string, string>, model: string, api: stri
   const childEnv: Record<string, string> = { ...baseEnv, IS_SANDBOX: "1" };
   const normalizedModel = model.trim().toLowerCase();
 
-  if (api.trim()) childEnv.ANTHROPIC_AUTH_TOKEN = api.trim();
-
   if (normalizedModel === "glm") {
+    // GLM uses the api token from settings
+    if (api.trim()) childEnv.ANTHROPIC_AUTH_TOKEN = api.trim();
     childEnv.ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
     childEnv.API_TIMEOUT_MS = "3000000";
+  } else {
+    // Claude models use ANTHROPIC_AUTH_TOKEN from environment (not from settings.api)
+    // settings.api is reserved for GLM fallback tokens
+    // Remove any GLM token that might be in baseEnv
+    delete childEnv.ANTHROPIC_AUTH_TOKEN;
   }
 
   return childEnv;

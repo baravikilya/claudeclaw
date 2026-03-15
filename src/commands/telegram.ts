@@ -8,6 +8,10 @@ import { resolveSkillPrompt, listSkills } from "../skills";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 
+// Telegram Bot API endpoints
+const API_BASE = "https://api.telegram.org/bot";
+const FILE_API_BASE = "https://api.telegram.org/file/bot";
+
 // Voice mode tracking for TTS
 const voiceModeChats = new Set<number>();
 
