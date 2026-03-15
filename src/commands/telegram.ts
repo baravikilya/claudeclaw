@@ -95,6 +95,8 @@ async function applyModelToSettings(model: string): Promise<void> {
   const raw = JSON.parse(await Bun.file(SETTINGS_FILE_PATH).text());
   raw.model = model;
   await Bun.write(SETTINGS_FILE_PATH, JSON.stringify(raw, null, 2) + "\n");
+  // Reset session when model changes so the new model is used from scratch
+  await resetSession();
   await reloadSettings();
 }
 
